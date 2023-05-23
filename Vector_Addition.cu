@@ -1,91 +1,103 @@
-#include <math.h>
-#include <time.h>
-#include <iostream>
 #include "cuda_runtime.h"
+#include <iostream>
+#include <cstdlib>
+#include <time.h>
+#include <iomanip>
 
+using namespace std;
 
-void cpuSum(int* A, int* B, int* C, int N){
-    for (int i=0; i<N; ++i){
-        C[i] = A[i] + B[i];
+__global__ void addVec(int N, int *arr1, int *arr2, int *arr3)
+{
+    int tId = blockDim.x * blockIdx.x + threadIdx.x;
+
+    if (tId < N)
+    {
+        arr3[tId] = arr1[tId] + arr2[tId];
     }
 }
 
-__global__ void kernel(int* A, int* B, int* C, int N){
-    int i = blockDim.x * blockIdx.x + threadIdx.x;
-    if (i < N){
-        C[i] = A[i] + B[i];
+void cpuAdd(int N, int arr1[], int arr2[], int arr3[])
+{
+    for (int i = 0; i < N; i++)
+    {
+        arr3[i] = arr1[i] + arr2[i];
     }
 }
 
-void gpuSum(int* A, int* B, int* C, int N){
-    
-    int threadsPerBlock = min(1024, N);
-    int blocksPerGrid = ceil(double(N) / double(threadsPerBlock));
-
-    kernel<<<blocksPerGrid, threadsPerBlock>>>(A, B, C, N);
-
-}
-
-bool isVectorEqual(int* A, int* B, int N){
-    for (int i=0; i<N; ++i){
-        if (A[i] != B[i])   return false; 
+bool verify(int N, int *C, int *D)
+{
+    for (int i = 0; i < N; i++)
+    {
+        if (C[i] != D[i])
+        {
+            return false;
+        }
     }
+
     return true;
 }
-int main(){
-    int N = 2e7;
-    int *A, *B, *C, *D, *d_A, *d_B, *d_C;
-    int size = N * sizeof(int);
 
-    A = (int*)malloc(size);
-    B = (int*)malloc(size);
-    C = (int*)malloc(size);
-    D = (int*)malloc(size);
-    
-    
-    for (int i=0; i<N; ++i){
+int main()
+{
+    int N;
+    clock_t start, end;
+    double CPUTime, GPUTime;
+    srand(time(NULL));
+    cout << "Enter the value of N : ";
+    cin >> N;
+
+    int *A = new int[N];
+    int *B = new int[N];
+    int *C = new int[N];
+    int *D = new int[N];
+
+    for (int i = 0; i < N; i++)
+    {
         A[i] = rand() % 1000;
         B[i] = rand() % 1000;
     }
 
-
-    // CPU
-    clock_t start, end;
-
+    // CPU Addition
     start = clock();
-    cpuSum(A, B, C, N);
+    cpuAdd(N, A, B, C);
     end = clock();
+    CPUTime = ((float)(end - start)) / CLOCKS_PER_SEC;
+    cout << "CPUTime : " << CPUTime << endl;
 
-    float timeTakenCPU = ((float)(end - start)) / CLOCKS_PER_SEC;
-    
+    // Allocate memory to GPU
+    int *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, sizeof(int) * N);
+    cudaMalloc(&d_B, sizeof(int) * N);
+    cudaMalloc(&d_C, sizeof(int) * N);
 
-    // GPU
-    cudaMalloc(&d_A, size);
-    cudaMalloc(&d_B, size);
-    cudaMalloc(&d_C, size);
-    
-    cudaMemcpy(d_A, A, size, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, B, size, cudaMemcpyHostToDevice);
+    // Copy Host Vector to Device
+    cudaMemcpy(d_A, A, sizeof(int) * N, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, sizeof(int) * N, cudaMemcpyHostToDevice);
 
+    // Run the kernel
     start = clock();
-    gpuSum(d_A, d_B, d_C, N);
+    addVec<<<N / 2 + 1, 2>>>(N, d_A, d_B, d_C);
     cudaDeviceSynchronize();
-    cudaMemcpy(D, d_C, size, cudaMemcpyDeviceToHost);
-    
     end = clock();
-    float timeTakenGPU = ((float)(end - start)) / CLOCKS_PER_SEC;
+    GPUTime = ((float)(end - start)) / CLOCKS_PER_SEC;
+    cout << "GPUTime : " << GPUTime << endl;
 
-    // free device memory
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
+    // Copy Result back to CPU memory
+    cudaMemcpy(D, d_C, sizeof(int) * N, cudaMemcpyDeviceToHost);
 
-    // Verify result
-    bool success = isVectorEqual(C, D, N);
+    // Verify the answer
+    bool result = verify(N, C, D);
 
-    printf("CPU Time: %f \n", timeTakenCPU);
-    printf("GPU Time: %f \n", timeTakenGPU);
-    printf("Speed Up: %f \n", timeTakenCPU/timeTakenGPU);
-    printf("Verification: %s \n", success ? "true" : "false");
-    
+    if (!result)
+    {
+        cout << "Verification Failed";
+    }
+    else
+    {
+        cout << "Verification Passed!";
+    }
+
+    cout << "\nSpeedUp : " << fixed << setprecision(10) << CPUTime / GPUTime << endl;
+
+    return 0;
 }
